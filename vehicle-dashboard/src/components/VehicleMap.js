@@ -19,6 +19,7 @@ const VehicleMap = () => {
   const [requestPending, setRequestPending] = useState(false);
   const [requestAccepted, setRequestAccepted] = useState(false);
   const [allTrafficLightMarkers, setAllTrafficLightMarkers] = useState([]);
+  const [nearbyTrafficLights, setNearbyTrafficLights] = useState(new Set());
 
   const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
 
@@ -46,6 +47,47 @@ const VehicleMap = () => {
       setRequestPending(true);
     };
   }, []);
+
+  // Function to calculate distance between two points in meters
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distance = R * c;
+    
+    return distance; // Distance in meters
+  };
+
+  // Check for nearby traffic lights whenever ambulance position changes
+  useEffect(() => {
+    if (requestAccepted && trafficLightMarkers.length > 0) {
+      trafficLightMarkers.forEach((trafficLight, index) => {
+        const distance = calculateDistance(
+          ambulancePosition.lat, ambulancePosition.lng,
+          trafficLight.lat, trafficLight.lng
+        );
+        
+        // Generate a unique ID for this traffic light
+        const trafficLightId = `${trafficLight.lat}-${trafficLight.lng}`;
+        
+        // If we're within 200m and haven't logged this light yet
+        if (distance <= 200 && !nearbyTrafficLights.has(trafficLightId)) {
+          console.log(`🚦 Traffic Light at (${trafficLight.lat}, ${trafficLight.lng})`);
+          console.log(`📏 Distance: ${distance.toFixed(2)} meters`);
+          
+          // Add to set of logged traffic lights
+          setNearbyTrafficLights(prev => new Set([...prev, trafficLightId]));
+        }
+      });
+    }
+  }, [ambulancePosition, trafficLightMarkers, requestAccepted, nearbyTrafficLights]);
 
   useEffect(() => {
     if (!patientLocation || !mapLoaded || !requestAccepted) return;
@@ -147,41 +189,40 @@ const VehicleMap = () => {
     fetchRoute();
   }, [patientLocation, mapLoaded, requestAccepted]);
   
-  // Function to move ambulance smoothly along the route.
   // Helper function to calculate distance from a point to a line segment
-const distanceToLineSegment = (x1, y1, x2, y2, px, py) => {
-  const A = px - x1;
-  const B = py - y1;
-  const C = x2 - x1;
-  const D = y2 - y1;
+  const distanceToLineSegment = (x1, y1, x2, y2, px, py) => {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
 
-  const dot = A * C + B * D;
-  const len_sq = C * C + D * D;
-  let param = -1;
-  
-  if (len_sq !== 0) param = dot / len_sq;
+    const dot = A * C + B * D;
+    const len_sq = C * C + D * D;
+    let param = -1;
+    
+    if (len_sq !== 0) param = dot / len_sq;
 
-  let xx, yy;
+    let xx, yy;
 
-  if (param < 0) {
-    xx = x1;
-    yy = y1;
-  } else if (param > 1) {
-    xx = x2;
-    yy = y2;
-  } else {
-    xx = x1 + param * C;
-    yy = y1 + param * D;
-  }
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
 
-  const dx = px - xx;
-  const dy = py - yy;
-  
-  // Return the distance
-  return Math.sqrt(dx * dx + dy * dy);
-};
+    const dx = px - xx;
+    const dy = py - yy;
+    
+    // Return the distance
+    return Math.sqrt(dx * dx + dy * dy);
+  };
 
-const moveAmbulanceSmoothly = (routePath) => {
+  const moveAmbulanceSmoothly = (routePath) => {
     let index = 0;
   
     const moveStep = () => {
@@ -209,7 +250,7 @@ const moveAmbulanceSmoothly = (routePath) => {
             index++;
             moveStep();
           }
-        }, 50); // Controls overall speed (lower = faster)
+        }, 30); // Controls overall speed (lower = faster)
       }
     };
   
@@ -219,6 +260,7 @@ const moveAmbulanceSmoothly = (routePath) => {
   const handleAcceptRequest = async () => {
     setRequestPending(false);
     setRequestAccepted(true);
+    setNearbyTrafficLights(new Set()); // Reset the set of logged traffic lights
 
     if (emergencyData?.name) {
       try {
@@ -269,6 +311,19 @@ const moveAmbulanceSmoothly = (routePath) => {
                 <div className="card-body">
                   <p><strong>ETA:</strong> {eta ? eta : "Calculating..."}</p>
                   <p><strong>Traffic Lights on Route:</strong> {trafficLights} 🚦</p>
+                  <div className="mt-3">
+                    <strong>Nearby Traffic Lights:</strong>
+                    <div style={{maxHeight: "200px", overflowY: "auto"}}>
+                      {Array.from(nearbyTrafficLights).map((id, index) => {
+                        const [lat, lng] = id.split('-');
+                        return (
+                          <div key={id} className="alert alert-info py-1 my-1">
+                            Traffic Light #{index + 1}: ({parseFloat(lat).toFixed(5)}, {parseFloat(lng).toFixed(5)})
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -308,16 +363,28 @@ const moveAmbulanceSmoothly = (routePath) => {
                 {/* Display traffic light markers based on request status */}
                 {requestAccepted ? (
                   // When request is accepted, show only traffic lights on the route
-                  trafficLightMarkers.map((marker, index) => (
-                    <Marker
-                      key={`route-traffic-light-${index}`}
-                      position={marker}
-                      icon={{
-                        url: "https://img.icons8.com/color/48/000000/traffic-light.png",
-                        scaledSize: new window.google.maps.Size(30, 30),
-                      }}
-                    />
-                  ))
+                  trafficLightMarkers.map((marker, index) => {
+                    // Calculate distance to ambulance
+                    const distance = calculateDistance(
+                      ambulancePosition.lat, ambulancePosition.lng,
+                      marker.lat, marker.lng
+                    );
+                    
+                    // Change icon size based on proximity
+                    const isNearby = distance <= 200;
+                    const iconSize = isNearby ? 40 : 30;
+                    
+                    return (
+                      <Marker
+                        key={`route-traffic-light-${index}`}
+                        position={marker}
+                        icon={{
+                          url: "https://img.icons8.com/color/48/000000/traffic-light.png",
+                          scaledSize: new window.google.maps.Size(iconSize, iconSize),
+                        }}
+                      />
+                    );
+                  })
                 ) : (
                   // Before request is accepted, show all traffic lights
                   allTrafficLightMarkers.map((marker, index) => (
