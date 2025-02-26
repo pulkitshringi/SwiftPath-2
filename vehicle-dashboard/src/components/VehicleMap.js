@@ -22,6 +22,39 @@ const VehicleMap = () => {
   const [nearbyTrafficLights, setNearbyTrafficLights] = useState(new Set());
 
   const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+  useEffect(() => {
+    if (requestAccepted && trafficLightMarkers.length > 0) {
+      let detectedLights = new Set();
+      trafficLightMarkers.forEach((trafficLight) => {
+        const distance = calculateDistance(
+          ambulancePosition.lat, ambulancePosition.lng,
+          trafficLight.lat, trafficLight.lng
+        );
+        
+        if (distance <= 200) {
+          const trafficLightId = `${trafficLight.lat}-${trafficLight.lng}`;
+          if (!nearbyTrafficLights.has(trafficLightId)) {
+            detectedLights.add(trafficLightId);
+          }
+        }
+      });
+  
+      if (detectedLights.size > 0) {
+        console.log("🚦 Sending traffic light data to backend...");
+        ws.send(JSON.stringify({
+          name: emergencyData?.name,
+          nearbyTrafficLights: Array.from(detectedLights).map((id) => {
+            const [lat, lng] = id.split('-').map(Number);
+            return { lat, lng };
+          })
+        }));
+      }
+  
+      setNearbyTrafficLights((prev) => new Set([...prev, ...detectedLights]));
+    }
+  }, [ambulancePosition, trafficLightMarkers, requestAccepted]);
+  
+
 
   // Load all traffic lights initially when the map loads
   useEffect(() => {
@@ -38,15 +71,50 @@ const VehicleMap = () => {
     }
   }, [mapLoaded]);
 
-  useEffect(() => {
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      console.log("New patient request received:", data);
-      setEmergencyData(data);
-      setPatientLocation({ lat: data.latitude, lng: data.longitude });
-      setRequestPending(true);
+// Updated WebSocket message handler for VehicleMap.jsx
+// Updated WebSocket message handler for VehicleMap.jsx
+useEffect(() => {
+  ws.onmessage = (event) => {
+    // Handle the data whether it's a Blob or text
+    const processData = (jsonData) => {
+      try {
+        const data = JSON.parse(jsonData);
+        
+        // Check if this is a new emergency request or another type of message
+        if (data.messageType === "emergencyRequest") {
+          console.log("New patient request received:", data);
+          setEmergencyData(data);
+          setPatientLocation({ lat: data.latitude, lng: data.longitude });
+          setRequestPending(true);
+        } 
+        else if (data.messageType === "trafficLightUpdate") {
+          // Handle traffic light data without changing the request state
+          console.log("Traffic light update received:", data);
+          // Process traffic light updates if needed
+        }
+        else if (data.messageType === "coordinateUpdate") {
+          // Handle coordinate updates without showing the request window
+          console.log("Coordinate update received:", data);
+          // Update relevant state without setting requestPending to true
+        }
+        else {
+          console.log("Unknown message type received:", data);
+        }
+      } catch (error) {
+        console.error("Error parsing WebSocket message:", error);
+      }
     };
-  }, []);
+
+    // Check if the data is a Blob (binary data)
+    if (event.data instanceof Blob) {
+      // Read the Blob as text first
+      event.data.text().then(processData);
+    } else {
+      // If it's already text, process it directly
+      processData(event.data);
+    }
+  };
+}, []);
 
   // Function to calculate distance between two points in meters
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
