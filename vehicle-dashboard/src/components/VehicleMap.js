@@ -7,9 +7,37 @@ const containerStyle = { width: "100%", height: "100vh" };
 const center = { lat: 13.0827, lng: 80.2707 }; // Default Chennai center
 const ws = new WebSocket("ws://localhost:8080");
 
+const calculateDirection = (prevPos, currentPos) => {
+  // Calculate bearing between two points
+  const toRadians = (degrees) => degrees * Math.PI / 180;
+  const toDegrees = (radians) => radians * 180 / Math.PI;
+  
+  const startLat = toRadians(prevPos.lat);
+  const startLng = toRadians(prevPos.lng);
+  const destLat = toRadians(currentPos.lat);
+  const destLng = toRadians(currentPos.lng);
+  
+  const y = Math.sin(destLng - startLng) * Math.cos(destLat);
+  const x = Math.cos(startLat) * Math.sin(destLat) -
+            Math.sin(startLat) * Math.cos(destLat) * Math.cos(destLng - startLng);
+  
+  let bearing = toDegrees(Math.atan2(y, x));
+  bearing = (bearing + 360) % 360; // Normalize to 0-360
+  
+  // Convert bearing to cardinal direction
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+  const index = Math.round(bearing / 45);
+  
+  return {
+    degrees: bearing,
+    cardinal: directions[index]
+  };
+};
+
 const VehicleMap = () => {
   const [directions, setDirections] = useState(null);
   const [ambulancePosition, setAmbulancePosition] = useState({ lat: 13.0827, lng: 80.2707 });
+  const [prevPosition, setPrevPosition] = useState({ lat: 13.0827, lng: 80.2707 });
   const [patientLocation, setPatientLocation] = useState(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [emergencyData, setEmergencyData] = useState(null);
@@ -20,11 +48,24 @@ const VehicleMap = () => {
   const [requestAccepted, setRequestAccepted] = useState(false);
   const [allTrafficLightMarkers, setAllTrafficLightMarkers] = useState([]);
   const [nearbyTrafficLights, setNearbyTrafficLights] = useState(new Set());
+  const [ambulanceDirection, setAmbulanceDirection] = useState({ cardinal: 'N', degrees: 0 });
 
   const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+  
   useEffect(() => {
+    // Calculate and update ambulance direction whenever position changes
+    if (ambulancePosition.lat !== prevPosition.lat || ambulancePosition.lng !== prevPosition.lng) {
+      const direction = calculateDirection(prevPosition, ambulancePosition);
+      setAmbulanceDirection(direction);
+      setPrevPosition(ambulancePosition);
+    }
+  }, [ambulancePosition, prevPosition]);
+
+  useEffect(() => {
+    // Check for nearby traffic lights and send data to server
     if (requestAccepted && trafficLightMarkers.length > 0) {
       let detectedLights = new Set();
+      
       trafficLightMarkers.forEach((trafficLight) => {
         const distance = calculateDistance(
           ambulancePosition.lat, ambulancePosition.lng,
@@ -41,20 +82,42 @@ const VehicleMap = () => {
   
       if (detectedLights.size > 0) {
         console.log("🚦 Sending traffic light data to backend...");
+        
+        // Calculate direction from traffic light to ambulance (fromDirection)
+        const trafficLightDataWithDirections = Array.from(detectedLights).map((id) => {
+          const [lat, lng] = id.split('-').map(Number);
+          
+          // Direction FROM traffic light TO ambulance
+          const fromDirectionObj = calculateDirection(
+            { lat, lng }, 
+            ambulancePosition
+          );
+          
+          // Direction FROM ambulance TO traffic light
+          const toDirectionObj = calculateDirection(
+            ambulancePosition,
+            { lat, lng }
+          );
+          
+          return { 
+            lat, 
+            lng,
+            direction: toDirectionObj.cardinal,     // Direction ambulance is heading toward traffic light
+            fromDirection: fromDirectionObj.cardinal, // Direction from traffic light to ambulance
+            bearing: toDirectionObj.degrees           // Exact bearing in degrees
+          };
+        });
+        
         ws.send(JSON.stringify({
           name: emergencyData?.name,
-          nearbyTrafficLights: Array.from(detectedLights).map((id) => {
-            const [lat, lng] = id.split('-').map(Number);
-            return { lat, lng };
-          })
+          fromDirection: ambulanceDirection.cardinal, // Add global ambulance direction as fallback
+          nearbyTrafficLights: trafficLightDataWithDirections
         }));
       }
   
       setNearbyTrafficLights((prev) => new Set([...prev, ...detectedLights]));
     }
-  }, [ambulancePosition, trafficLightMarkers, requestAccepted]);
-  
-
+  }, [ambulancePosition, trafficLightMarkers, requestAccepted, ambulanceDirection, emergencyData]);
 
   // Load all traffic lights initially when the map loads
   useEffect(() => {
@@ -71,50 +134,49 @@ const VehicleMap = () => {
     }
   }, [mapLoaded]);
 
-// Updated WebSocket message handler for VehicleMap.jsx
-// Updated WebSocket message handler for VehicleMap.jsx
-useEffect(() => {
-  ws.onmessage = (event) => {
-    // Handle the data whether it's a Blob or text
-    const processData = (jsonData) => {
-      try {
-        const data = JSON.parse(jsonData);
-        
-        // Check if this is a new emergency request or another type of message
-        if (data.messageType === "emergencyRequest") {
-          console.log("New patient request received:", data);
-          setEmergencyData(data);
-          setPatientLocation({ lat: data.latitude, lng: data.longitude });
-          setRequestPending(true);
-        } 
-        else if (data.messageType === "trafficLightUpdate") {
-          // Handle traffic light data without changing the request state
-          console.log("Traffic light update received:", data);
-          // Process traffic light updates if needed
+  // Updated WebSocket message handler
+  useEffect(() => {
+    ws.onmessage = (event) => {
+      // Handle the data whether it's a Blob or text
+      const processData = (jsonData) => {
+        try {
+          const data = JSON.parse(jsonData);
+          
+          // Check if this is a new emergency request or another type of message
+          if (data.messageType === "emergencyRequest") {
+            console.log("New patient request received:", data);
+            setEmergencyData(data);
+            setPatientLocation({ lat: data.latitude, lng: data.longitude });
+            setRequestPending(true);
+          } 
+          else if (data.messageType === "trafficLightUpdate") {
+            // Handle traffic light data without changing the request state
+            console.log("Traffic light update received:", data);
+            // Process traffic light updates if needed
+          }
+          else if (data.messageType === "coordinateUpdate") {
+            // Handle coordinate updates without showing the request window
+            console.log("Coordinate update received:", data);
+            // Update relevant state without setting requestPending to true
+          }
+          else {
+            console.log("Unknown message type received:", data);
+          }
+        } catch (error) {
+          console.error("Error parsing WebSocket message:", error);
         }
-        else if (data.messageType === "coordinateUpdate") {
-          // Handle coordinate updates without showing the request window
-          console.log("Coordinate update received:", data);
-          // Update relevant state without setting requestPending to true
-        }
-        else {
-          console.log("Unknown message type received:", data);
-        }
-      } catch (error) {
-        console.error("Error parsing WebSocket message:", error);
+      };
+
+      // Check if the data is a Blob (binary data)
+      if (event.data instanceof Blob) {
+        // Read the Blob as text first
+        event.data.text().then(processData);
+      } else {
+        // If it's already text, process it directly
+        processData(event.data);
       }
     };
-
-    // Check if the data is a Blob (binary data)
-    if (event.data instanceof Blob) {
-      // Read the Blob as text first
-      event.data.text().then(processData);
-    } else {
-      // If it's already text, process it directly
-      processData(event.data);
-    }
-  };
-}, []);
+  }, []);
 
   // Function to calculate distance between two points in meters
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -311,6 +373,7 @@ useEffect(() => {
           if (step < totalSteps) {
             const lat = start.lat + ((end.lat - start.lat) * step) / totalSteps;
             const lng = start.lng + ((end.lng - start.lng) * step) / totalSteps;
+            
             setAmbulancePosition({ lat, lng });
             step++;
           } else {
@@ -379,14 +442,32 @@ useEffect(() => {
                 <div className="card-body">
                   <p><strong>ETA:</strong> {eta ? eta : "Calculating..."}</p>
                   <p><strong>Traffic Lights on Route:</strong> {trafficLights} 🚦</p>
+                  <p><strong>Ambulance Direction:</strong> {ambulanceDirection.cardinal} ({ambulanceDirection.degrees.toFixed(1)}°)</p>
                   <div className="mt-3">
                     <strong>Nearby Traffic Lights:</strong>
                     <div style={{maxHeight: "200px", overflowY: "auto"}}>
                       {Array.from(nearbyTrafficLights).map((id, index) => {
                         const [lat, lng] = id.split('-');
+                        
+                        // Direction FROM traffic light TO ambulance (fromDirection)
+                        const fromDirection = calculateDirection(
+                          { lat: parseFloat(lat), lng: parseFloat(lng) },
+                          ambulancePosition
+                        );
+                        
+                        // Direction FROM ambulance TO traffic light (direction)
+                        const toDirection = calculateDirection(
+                          ambulancePosition,
+                          { lat: parseFloat(lat), lng: parseFloat(lng) }
+                        );
+                        
                         return (
                           <div key={id} className="alert alert-info py-1 my-1">
                             Traffic Light #{index + 1}: ({parseFloat(lat).toFixed(5)}, {parseFloat(lng).toFixed(5)})
+                            <br />
+                            <small>To Light: {toDirection.cardinal} ({toDirection.degrees.toFixed(1)}°)</small>
+                            <br />
+                            <small>From Light: {fromDirection.cardinal} ({fromDirection.degrees.toFixed(1)}°)</small>
                           </div>
                         );
                       })}

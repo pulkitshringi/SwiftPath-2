@@ -1,3 +1,4 @@
+// server.js
 require("dotenv").config();
 const WebSocket = require("ws");
 const twilio = require("twilio");
@@ -68,7 +69,7 @@ console.log("🚀 WebSocket Server running on ws://localhost:8080");
 
 // 🔹 Function to handle emergency requests
 async function handleEmergencyRequest(data, senderWs) {
-  const { name, nearbyTrafficLights, latitude, longitude } = data;
+  const { name, nearbyTrafficLights, latitude, longitude, direction, fromDirection } = data;
   
   // Ensure the data has the required fields
   if (!name) {
@@ -89,6 +90,8 @@ async function handleEmergencyRequest(data, senderWs) {
         batch.set(trafficLightRef, {
           latitude: trafficLight.lat,
           longitude: trafficLight.lng,
+          direction: trafficLight.direction, // "to" direction
+          fromDirection: trafficLight.fromDirection || data.fromDirection, // Add "from" direction
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         });
       });
@@ -105,11 +108,12 @@ async function handleEmergencyRequest(data, senderWs) {
     name: name,
     latitude: latitude || data.lat,
     longitude: longitude || data.lng,
+    direction: direction, // "to" direction
+    fromDirection: fromDirection, // Include "from" direction
     timestamp: new Date().toISOString(),
     // Include any other relevant fields
     ...data
   });
-
   // Broadcast to all connected clients except the sender
   broadcastMessage(emergencyMessage, senderWs);
 }
@@ -122,6 +126,8 @@ function broadcastCoordinateUpdate(data) {
     latitude: data.latitude || data.lat,
     longitude: data.longitude || data.lng,
     vehicleId: data.vehicleId,
+    direction: data.direction, // "to" direction
+    fromDirection: data.fromDirection, // Include "from" direction
     timestamp: new Date().toISOString()
   });
 
@@ -192,7 +198,3 @@ async function sendTrafficLightUpdates() {
     console.error("❌ Error fetching traffic light data:", error);
   }
 }
-
-// Example: Set up periodic traffic light updates
-// Uncomment to enable
-// setInterval(sendTrafficLightUpdates, 30000); // Update every 30 seconds
