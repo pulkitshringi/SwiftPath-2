@@ -37,8 +37,8 @@ const calculateDirection = (prevPos, currentPos) => {
 
 const VehicleMap = () => {
   const [directions, setDirections] = useState(null);
-  const [ambulancePosition, setAmbulancePosition] = useState({ lat: 13.0827, lng: 80.2707 });
-  const [prevPosition, setPrevPosition] = useState({ lat: 13.0827, lng: 80.2707 });
+  const [ambulancePosition, setAmbulancePosition] = useState({ lat: 13.104828921878372, lng: 80.27684466155233 });
+  const [prevPosition, setPrevPosition] = useState({lat: 13.104828921878372, lng: 80.27684466155233 });
   const [patientLocation, setPatientLocation] = useState(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [emergencyData, setEmergencyData] = useState(null);
@@ -147,7 +147,7 @@ const VehicleMap = () => {
           if (data.messageType === "emergencyRequest") {
             console.log("New patient request received:", data);
             setEmergencyData(data);
-            setPatientLocation({ lat: data.latitude, lng: data.longitude });
+            setPatientLocation({ lat: 13.064377087726397, lng:  80.26580171072366 });
             setRequestPending(true);
           } 
           else if (data.messageType === "trafficLightUpdate") {
